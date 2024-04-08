@@ -37,6 +37,15 @@ TKDEF(TKSTR1, TKSTR2)
   NULL
 };
 
+static const uint8_t tokennums[] = {
+#define TKNUM1(name)		(uint8_t)TK_##name,
+#define TKNUM2(name, sym)	(uint8_t)TK_##name,
+TKDEF(TKNUM1, TKNUM2)
+#undef TKNUM1
+#undef TKNUM2
+  0
+};
+
 /* -- Buffer handling ----------------------------------------------------- */
 
 #define LEX_EOF			(-1)
@@ -419,7 +428,7 @@ int lj_lex_setup(lua_State *L, LexState *ls)
     lex_next(ls);
     header = 1;
   }
-  if (ls->c == '#') {  /* Skip POSIX #! header line. */
+  if (ls->c == '#') {  /* Skip POSIX #! header line or parse directive. */
     do {
       lex_next(ls);
       if (ls->c == LEX_EOF) return 0;
@@ -506,10 +515,34 @@ void lj_lex_error(LexState *ls, LexToken tok, ErrMsg em, ...)
 void lj_lex_init(lua_State *L)
 {
   uint32_t i;
+  global_State *g = G(L);
+  lj_assertX(g->pars.mode == 0);
   for (i = 0; i < TK_RESERVED; i++) {
     GCstr *s = lj_str_newz(L, tokennames[i]);
     fixstring(s);  /* Reserved words are never collected. */
+    if (tokennums[i] == (uint8_t)TK_function)
+      g->pars.funcstr = s;
+    else if (tokennums[i] == (uint8_t)TK_fn) {
+      g->pars.fnstr = s;
+      continue;
+    }
     s->reserved = (uint8_t)(i+1);
   }
+  lj_assertG(g->pars.fnstr != NULL && g->pars.funcstr != NULL);
 }
 
+void lj_lex_fswitch(lua_State *L, uint8_t mode)
+{
+  lj_assertX(index < 2, "bad syntax");
+  global_State *g = G(L);
+  ParserState *ps = &g->pars;
+  if (ps->mode == mode) return;
+  ps->mode = mode;
+  if (mode == 1) {
+    ps->fnstr->reserved = ps->funcstr->reserved;
+    ps->funcstr->reserved = 0;
+  } else {
+    ps->funcstr->reserved = ps->fnstr->reserved;
+    ps->fnstr->reserved = 0;
+  }
+}

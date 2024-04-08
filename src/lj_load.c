@@ -41,6 +41,7 @@ static TValue *cpparser(lua_State *L, lua_CFunction dummy, void *ud)
     while ((c = *mode++)) {
       if (c == (bc ? 'b' : 't')) xmode = 0;
       if (c == (LJ_FR2 ? 'W' : 'X')) ls->fr2 = !LJ_FR2;
+      // @todo would be great to add option for new syntax, 'r';
     }
     if (xmode) {
       setstrV(L, L->top++, lj_err_str(L, LJ_ERR_XMODE));

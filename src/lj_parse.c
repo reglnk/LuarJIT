@@ -1858,10 +1858,14 @@ static BCReg parse_params(LexState *ls, int needself)
 
 /* Forward declaration. */
 static void parse_chunk(LexState *ls);
+static void parse_chunk_single(LexState *ls);
+static int parse_chunk_opt(LexState *ls);
+static int parse_chunk_optret(LexState *ls);
 
 /* Parse body of a function. */
 static void parse_body(LexState *ls, ExpDesc *e, int needself, BCLine line)
 {
+  global_State *g = G(ls->L);
   FuncState fs, *pfs = ls->fs;
   FuncScope bl;
   GCproto *pt;
@@ -1872,9 +1876,12 @@ static void parse_body(LexState *ls, ExpDesc *e, int needself, BCLine line)
   fs.numparams = (uint8_t)parse_params(ls, needself);
   fs.bcbase = pfs->bcbase + pfs->pc;
   fs.bclim = pfs->bclim - pfs->pc;
+  int brk = 1;
   bcemit_AD(&fs, BC_FUNCF, 0, 0);  /* Placeholder. */
-  parse_chunk(ls);
-  if (ls->tok != TK_end) lex_match(ls, TK_end, TK_function, line);
+  if (g->pars.mode == 0) {
+    parse_chunk(ls);
+    if (ls->tok != TK_end) lex_match(ls, TK_end, TK_function, line);
+  } else brk = parse_chunk_optret(ls);
   pt = fs_finish(ls, (ls->lastline = ls->linenumber));
   pfs->bcbase = ls->bcstack + oldbase;  /* May have been reallocated. */
   pfs->bclim = (BCPos)(ls->sizebcstack - oldbase);
@@ -1889,7 +1896,7 @@ static void parse_body(LexState *ls, ExpDesc *e, int needself, BCLine line)
       pfs->flags |= PROTO_FIXUP_RETURN;
     pfs->flags |= PROTO_CHILD;
   }
-  lj_lex_next(ls);
+  if (brk) lj_lex_next(ls);
 }
 
 /* Parse expression list. Last expression is left open. */
@@ -2325,12 +2332,22 @@ static int parse_isend(LexToken tok)
   }
 }
 
+/* Check for end of block (c-like syntax). */
+static int parse_isend_s1(LexToken tok)
+{
+  switch (tok) {
+  case TK_else: case TK_elseif: case TK_until: case TK_eof: case '}':
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 /* Parse 'return' statement. */
 static void parse_return(LexState *ls)
 {
   BCIns ins;
   FuncState *fs = ls->fs;
-  lj_lex_next(ls);  /* Skip 'return'. */
   fs->flags |= PROTO_HAS_RETURN;
   if (parse_isend(ls->tok) || ls->tok == ';') {  /* Bare return. */
     ins = BCINS_AD(BC_RET0, 0, 1);
@@ -2386,6 +2403,7 @@ static void parse_goto(LexState *ls)
 static void parse_label(LexState *ls)
 {
   FuncState *fs = ls->fs;
+  global_State *g = G(ls->L);
   GCstr *name;
   MSize idx;
   fs->lasttarget = fs->pc;
@@ -2395,7 +2413,7 @@ static void parse_label(LexState *ls)
   if (gola_findlabel(ls, name))
     lj_lex_error(ls, 0, LJ_ERR_XLDUP, strdata(name));
   idx = gola_new(ls, name, VSTACK_LABEL, fs->pc);
-  lex_check(ls, TK_label);
+  if (g->pars.mode == 0) lex_check(ls, TK_label);
   /* Recursively parse trailing statements: labels and ';' (Lua 5.2 only). */
   for (;;) {
     if (ls->tok == TK_label) {
@@ -2426,21 +2444,44 @@ static void parse_block(LexState *ls)
   fscope_end(fs);
 }
 
+/* Parse a c-style block. */
+static int parse_block_opt(LexState *ls)
+{
+  FuncState *fs = ls->fs;
+  FuncScope bl;
+  fscope_begin(fs, &bl, 0);
+  int brk = parse_chunk_opt(ls);
+  fscope_end(fs);
+  return brk;
+}
+
 /* Parse 'while' statement. */
 static void parse_while(LexState *ls, BCLine line)
 {
+  global_State *g = G(ls->L);
   FuncState *fs = ls->fs;
   BCPos start, loop, condexit;
   FuncScope bl;
   lj_lex_next(ls);  /* Skip 'while'. */
   start = fs->lasttarget = fs->pc;
+  BCLine parl = ls->linenumber;
+  int par = 0;
+  if (g->pars.mode == 1)
+    par = lex_opt(ls, '(');
   condexit = expr_cond(ls);
   fscope_begin(fs, &bl, FSCOPE_LOOP);
-  lex_check(ls, TK_do);
+  if (par) lex_match(ls, ')', '(', parl);
+  if (g->pars.mode == 0)
+    lex_check(ls, TK_do);
+  else if (par)
+    lex_opt(ls, TK_do);
   loop = bcemit_AD(fs, BC_LOOP, fs->nactvar, 0);
-  parse_block(ls);
+  if (g->pars.mode == 0) {
+    parse_block(ls);
+    lex_match(ls, TK_end, TK_while, line);
+  } else if (parse_block_opt(ls))
+    lj_lex_next(ls); /* Skip '}'. */
   jmp_patch(fs, bcemit_jmp(fs), start);
-  lex_match(ls, TK_end, TK_while, line);
   fscope_end(fs);
   jmp_tohere(fs, condexit);
   jmp_patchins(fs, loop, fs->pc);
@@ -2449,6 +2490,7 @@ static void parse_while(LexState *ls, BCLine line)
 /* Parse 'repeat' statement. */
 static void parse_repeat(LexState *ls, BCLine line)
 {
+  global_State *g = G(ls->L);
   FuncState *fs = ls->fs;
   BCPos loop = fs->lasttarget = fs->pc;
   BCPos condexit;
@@ -2457,7 +2499,9 @@ static void parse_repeat(LexState *ls, BCLine line)
   fscope_begin(fs, &bl2, 0);  /* Inner scope. */
   lj_lex_next(ls);  /* Skip 'repeat'. */
   bcemit_AD(fs, BC_LOOP, fs->nactvar, 0);
-  parse_chunk(ls);
+  if (g->pars.mode == 0) parse_chunk(ls);
+  else if (parse_chunk_opt(ls))
+    lj_lex_next(ls); /* Skip '}'. */
   lex_match(ls, TK_until, TK_repeat, line);
   condexit = expr_cond(ls);  /* Parse condition (still inside inner scope). */
   if (!(bl2.flags & FSCOPE_UPVAL)) {  /* No upvalues? Just end inner scope. */
@@ -2476,6 +2520,7 @@ static void parse_repeat(LexState *ls, BCLine line)
 /* Parse numeric 'for'. */
 static void parse_for_num(LexState *ls, GCstr *varname, BCLine line)
 {
+  global_State *g = G(ls->L);
   FuncState *fs = ls->fs;
   BCReg base = fs->freereg;
   FuncScope bl;
@@ -2502,7 +2547,9 @@ static void parse_for_num(LexState *ls, GCstr *varname, BCLine line)
   fscope_begin(fs, &bl, 0);  /* Scope for visible variables. */
   var_add(ls, 1);
   bcreg_reserve(fs, 1);
-  parse_block(ls);
+  if (g->pars.mode == 0) parse_block(ls);
+  else if (parse_block_opt(ls))
+      lj_lex_next(ls);
   fscope_end(fs);
   /* Perform loop inversion. Loop control instructions are at the end. */
   loopend = bcemit_AJ(fs, BC_FORL, base, NO_JMP);
@@ -2549,6 +2596,7 @@ static int predict_next(LexState *ls, FuncState *fs, BCPos pc)
 /* Parse 'for' iterator. */
 static void parse_for_iter(LexState *ls, GCstr *indexname)
 {
+  global_State *g = G(ls->L);
   FuncState *fs = ls->fs;
   ExpDesc e;
   BCReg nvars = 0;
@@ -2577,7 +2625,11 @@ static void parse_for_iter(LexState *ls, GCstr *indexname)
   fscope_begin(fs, &bl, 0);  /* Scope for visible variables. */
   var_add(ls, nvars-3);
   bcreg_reserve(fs, nvars-3);
-  parse_block(ls);
+  if (g->pars.mode == 0) parse_block(ls);
+  else {
+    if (parse_block_opt(ls))
+      lj_lex_next(ls);
+  }
   fscope_end(fs);
   /* Perform loop inversion. Loop control instructions are at the end. */
   jmp_patchins(fs, loop, fs->pc);
@@ -2591,6 +2643,7 @@ static void parse_for_iter(LexState *ls, GCstr *indexname)
 /* Parse 'for' statement. */
 static void parse_for(LexState *ls, BCLine line)
 {
+  global_State *g = G(ls->L);
   FuncState *fs = ls->fs;
   GCstr *varname;
   FuncScope bl;
@@ -2603,24 +2656,36 @@ static void parse_for(LexState *ls, BCLine line)
     parse_for_iter(ls, varname);
   else
     err_syntax(ls, LJ_ERR_XFOR);
-  lex_match(ls, TK_end, TK_for, line);
+  if (g->pars.mode == 0) lex_match(ls, TK_end, TK_for, line);
   fscope_end(fs);  /* Resolve break list. */
 }
 
 /* Parse condition and 'then' block. */
 static BCPos parse_then(LexState *ls)
 {
+  global_State *g = G(ls->L);
   BCPos condexit;
   lj_lex_next(ls);  /* Skip 'if' or 'elseif'. */
+  BCLine condline = ls->linenumber;
+  int par = 0;
+  if (g->pars.mode == 1)
+    par = lex_opt(ls, '(');
   condexit = expr_cond(ls);
-  lex_check(ls, TK_then);
-  parse_block(ls);
+  if (par) {
+    lex_match(ls, ')', '(', condline);
+    lex_opt(ls, TK_then);
+  } else lex_check(ls, TK_then);
+  if (g->pars.mode == 0)
+    parse_block(ls);
+  else if (parse_block_opt(ls))
+    lj_lex_next(ls); /* Skip '}'. */
   return condexit;
 }
 
 /* Parse 'if' statement. */
 static void parse_if(LexState *ls, BCLine line)
 {
+  global_State *g = G(ls->L);
   FuncState *fs = ls->fs;
   BCPos flist;
   BCPos escapelist = NO_JMP;
@@ -2634,12 +2699,32 @@ static void parse_if(LexState *ls, BCLine line)
     jmp_append(fs, &escapelist, bcemit_jmp(fs));
     jmp_tohere(fs, flist);
     lj_lex_next(ls);  /* Skip 'else'. */
-    parse_block(ls);
+    if (g->pars.mode == 0) parse_block(ls);
+    else if (parse_block_opt(ls))
+      lj_lex_next(ls);
   } else {
     jmp_append(fs, &escapelist, flist);
   }
   jmp_tohere(fs, escapelist);
-  lex_match(ls, TK_end, TK_if, line);
+  if (g->pars.mode == 0) lex_match(ls, TK_end, TK_if, line);
+}
+
+/* -- Miscelanneous ------------------------------------------------------- */
+
+static void parse_attr(LexState *ls, BCLine line)
+{
+  lj_lex_next(ls); /* Skip '[' */
+  GCstr *s = lex_str(ls);
+  lua_State *L = ls->L;
+  if (s->len == 3 && !strcmp(strdata(s), "lua")) {
+    lj_lex_fswitch(L, 0);
+  } else if (s->len == 4 && !strcmp(strdata(s), "luar")) {
+    lj_lex_fswitch(L, 1);
+  } else {
+    setstrV(L, L->top++, lj_err_str(L, LJ_ERR_BCBAD));
+    lj_err_throw(L, LUA_ERRSYNTAX);
+  }
+  lex_check(ls, ']');
 }
 
 /* -- Parse statements ---------------------------------------------------- */
@@ -2648,17 +2733,30 @@ static void parse_if(LexState *ls, BCLine line)
 static int parse_stmt(LexState *ls)
 {
   BCLine line = ls->linenumber;
+  global_State *g = G(ls->L);
+  if (g->pars.mode == 0) {
+    if (ls->tok == TK_do) {
+      lj_lex_next(ls);
+      parse_block(ls);
+      lex_match(ls, TK_end, TK_do, line);
+      return 0;
+    }
+  }
+  else if (ls->tok == '{') {
+    lj_lex_next(ls);
+    parse_block(ls);
+    lex_match(ls, '}', '{', line);
+    return 0;
+  }
   switch (ls->tok) {
+  case '[':
+    parse_attr(ls, line);
+    break;
   case TK_if:
     parse_if(ls, line);
     break;
   case TK_while:
     parse_while(ls, line);
-    break;
-  case TK_do:
-    lj_lex_next(ls);
-    parse_block(ls);
-    lex_match(ls, TK_end, TK_do, line);
     break;
   case TK_for:
     parse_for(ls, line);
@@ -2674,6 +2772,7 @@ static int parse_stmt(LexState *ls)
     parse_local(ls);
     break;
   case TK_return:
+    lj_lex_next(ls);
     parse_return(ls);
     return 1;  /* Must be last. */
   case TK_break:
@@ -2705,9 +2804,17 @@ static int parse_stmt(LexState *ls)
 /* A chunk is a list of statements optionally separated by semicolons. */
 static void parse_chunk(LexState *ls)
 {
+  global_State *g = G(ls->L);
+  int (*isendFn)(LexToken);
+  switch (g->pars.mode) {
+    default:
+    case 0: isendFn = parse_isend; break;
+    case 1: isendFn = parse_isend_s1; break;
+  }
+
   int islast = 0;
   synlevel_begin(ls);
-  while (!islast && !parse_isend(ls->tok)) {
+  while (!islast && !isendFn(ls->tok)) {
     islast = parse_stmt(ls);
     lex_opt(ls, ';');
     lj_assertLS(ls->fs->framesize >= ls->fs->freereg &&
@@ -2716,6 +2823,62 @@ static void parse_chunk(LexState *ls)
     ls->fs->freereg = ls->fs->nactvar;  /* Free registers after each stmt. */
   }
   synlevel_end(ls);
+}
+
+/* Parses single statement. Unlike in previous function,
+ * at least one following statement is required.
+*/
+static void parse_chunk_single(LexState *ls)
+{
+  synlevel_begin(ls);
+  if (lex_opt(ls, ';')) {
+    synlevel_end(ls);
+    return;
+  }
+  parse_stmt(ls);
+  lex_opt(ls, ';');
+  lj_assertLS (
+    ls->fs->framesize >= ls->fs->freereg &&
+    ls->fs->freereg >= ls->fs->nactvar,
+    "bad regalloc"
+  );
+  ls->fs->freereg = ls->fs->nactvar;  /* Free registers after each stmt. */
+  synlevel_end(ls);
+}
+
+static int parse_chunk_opt(LexState *ls)
+{
+  BCLine line = ls->linenumber;
+  int brk = lex_opt(ls, '{');
+  if (brk) {
+    parse_chunk(ls);
+    if (ls->tok != '}') lex_match(ls, '}', '{', line);
+  } else parse_chunk_single(ls);
+  return brk;
+}
+
+static int parse_chunk_optret(LexState *ls)
+{
+  BCLine line = ls->linenumber;
+  if (lex_opt(ls, '{')) {
+    parse_chunk(ls);
+    if (ls->tok != '}') lex_match(ls, '}', '{', line);
+    return 1;
+  }
+  if (lex_opt(ls, ';')) {
+    return 0;
+  }
+  /* synlevel_begin(ls); */
+  parse_return(ls);
+  lex_opt(ls, ';');
+  lj_assertLS (
+    ls->fs->framesize >= ls->fs->freereg &&
+    ls->fs->freereg >= ls->fs->nactvar,
+    "bad regalloc"
+  );
+  ls->fs->freereg = ls->fs->nactvar;
+  /* synlevel_end(ls); */
+  return 0;
 }
 
 /* Entry point of bytecode parser. */
