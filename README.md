@@ -137,8 +137,8 @@ You can write:
 ## 5. Conslusion
 
 The new syntax doesn't need `end` keyword.
-Also it's not made indendation-dependent, meanwhile is not ambiguous, because the parser
-always knows where the statement ends. So the following is valid code for both versions:
+Also it's not made indendation-dependent, meanwhile is not more ambiguous than original Lua.
+So, the following is valid code for both versions:
 ```lua
 local i = something() print(i)
 ```
