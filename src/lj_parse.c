@@ -27,6 +27,7 @@
 #include "lj_parse.h"
 #include "lj_vm.h"
 #include "lj_vmevent.h"
+#include "stdio.h"
 
 /* -- Parser structures and definitions ----------------------------------- */
 
@@ -2097,7 +2098,9 @@ static BinOpr expr_binop(LexState *ls, ExpDesc *v, uint32_t limit);
 static void expr_unop(LexState *ls, ExpDesc *v)
 {
   BCOp op;
-  if (ls->tok == TK_not) {
+  global_State *g = G(ls->L);
+  int tk_not = g->pars.mode ? '!' : TK_not;
+  if (ls->tok == tk_not) {
     op = BC_NOT;
   } else if (ls->tok == '-') {
     op = BC_UNM;
@@ -2250,8 +2253,7 @@ static void parse_assignment(LexState *ls, LHSVarList *lh, BCReg nvars)
   bcemit_store(ls->fs, &lh->v, &e);
 }
 
-/* Parse call statement or assignment. */
-static void parse_call_assign(LexState *ls)
+static void parse_call_assign_lua(LexState *ls)
 {
   FuncState *fs = ls->fs;
   LHSVarList vl;
@@ -2262,6 +2264,54 @@ static void parse_call_assign(LexState *ls)
     vl.prev = NULL;
     parse_assignment(ls, &vl, 1);
   }
+}
+
+/* combined binop & traditional call-assign statement, so that
+ * parsing single statements of form 'a + whatever' is allowed
+ */
+static void parse_call_assign_luar(LexState *ls)
+{
+  FuncState *fs = ls->fs;
+  LHSVarList vl;
+  synlevel_begin(ls);
+  expr_primary(ls, &vl.v);
+  if (vl.v.k == VCALL) {  /* Function call statement. */
+    setbc_b(bcptr(fs, &vl.v), 1);  /* No results. */
+    synlevel_end(ls);
+    return;
+  }
+  vl.prev = NULL;
+  BinOpr op;
+  op = token2binop(ls->tok);
+  if (op == OPR_NOBINOPR) {
+    parse_assignment(ls, &vl, 1);
+    synlevel_end(ls);
+    return;
+  }
+  while (op != OPR_NOBINOPR && priority[op].left > 0) {
+    ExpDesc v2;
+    BinOpr nextop;
+    lj_lex_next(ls);
+    bcemit_binop_left(ls->fs, op, &vl.v);
+    /* Parse binary expression with higher priority. */
+    nextop = expr_binop(ls, &v2, priority[op].right);
+    bcemit_binop(ls->fs, op, &vl.v, &v2);
+    op = nextop;
+  }
+  synlevel_end(ls);
+
+  /* perhaps that thing works with 0 assignment destinations */
+  assign_adjust(ls, 0, 1, &vl.v);
+}
+
+/* Parse call statement or assignment. */
+static LJ_AINLINE void parse_call_assign(LexState *ls)
+{
+  global_State *g = G(ls->L);
+  if (g->pars.mode)
+    parse_call_assign_luar(ls);
+  else
+    parse_call_assign_lua(ls);
 }
 
 /* Parse 'local' statement. */
@@ -2717,9 +2767,9 @@ static void parse_attr(LexState *ls, BCLine line)
   GCstr *s = lex_str(ls);
   lua_State *L = ls->L;
   if (s->len == 3 && !strcmp(strdata(s), "lua")) {
-    lj_lex_fswitch(L, 0);
+    lua_setsyntaxmode(L, 0);
   } else if (s->len == 4 && !strcmp(strdata(s), "luar")) {
-    lj_lex_fswitch(L, 1);
+    lua_setsyntaxmode(L, 1);
   } else {
     setstrV(L, L->top++, lj_err_str(L, LJ_ERR_BCBAD));
     lj_err_throw(L, LUA_ERRSYNTAX);

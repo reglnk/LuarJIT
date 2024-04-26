@@ -9,6 +9,7 @@
 #define lj_lex_c
 #define LUA_CORE
 
+#include "lua.h"
 #include "lj_obj.h"
 #include "lj_gc.h"
 #include "lj_err.h"
@@ -296,109 +297,222 @@ static void lex_string(LexState *ls, TValue *tv)
 
 /* -- Main lexical scanner ------------------------------------------------ */
 
-/* Get next lexical token. */
-static LexToken lex_scan(LexState *ls, TValue *tv)
+static LexToken lex_scan0(LexState *ls, TValue *tv)
 {
   lj_buf_reset(&ls->sb);
   for (;;) {
     if (lj_char_isident(ls->c)) {
       GCstr *s;
       if (lj_char_isdigit(ls->c)) {  /* Numeric literal. */
-	lex_number(ls, tv);
-	return TK_number;
+        lex_number(ls, tv);
+        return TK_number;
       }
       /* Identifier or reserved word. */
       do {
-	lex_savenext(ls);
+        lex_savenext(ls);
       } while (lj_char_isident(ls->c));
       s = lj_parse_keepstr(ls, ls->sb.b, sbuflen(&ls->sb));
       setstrV(ls->L, tv, s);
       if (s->reserved > 0)  /* Reserved word? */
-	return TK_OFS + s->reserved;
+        return TK_OFS + s->reserved;
       return TK_name;
     }
     switch (ls->c) {
-    case '\n':
-    case '\r':
-      lex_newline(ls);
-      continue;
-    case ' ':
-    case '\t':
-    case '\v':
-    case '\f':
-      lex_next(ls);
-      continue;
-    case '-':
-      lex_next(ls);
-      if (ls->c != '-') return '-';
-      lex_next(ls);
+      case '\n':
+      case '\r':
+        lex_newline(ls);
+        continue;
+      case ' ':
+      case '\t':
+      case '\v':
+      case '\f':
+        lex_next(ls);
+        continue;
+      case '-':
+        lex_next(ls);
+        if (ls->c != '-') return '-';
+        lex_next(ls);
       if (ls->c == '[') {  /* Long comment "--[=*[...]=*]". */
-	int sep = lex_skipeq(ls);
-	lj_buf_reset(&ls->sb);  /* `lex_skipeq' may dirty the buffer */
-	if (sep >= 0) {
-	  lex_longstring(ls, NULL, sep);
-	  lj_buf_reset(&ls->sb);
-	  continue;
-	}
+        int sep = lex_skipeq(ls);
+        lj_buf_reset(&ls->sb);  /* `lex_skipeq' may dirty the buffer */
+        if (sep >= 0) {
+          lex_longstring(ls, NULL, sep);
+          lj_buf_reset(&ls->sb);
+          continue;
+        }
       }
       /* Short comment "--.*\n". */
       while (!lex_iseol(ls) && ls->c != LEX_EOF)
-	lex_next(ls);
+        lex_next(ls);
       continue;
-    case '[': {
-      int sep = lex_skipeq(ls);
-      if (sep >= 0) {
-	lex_longstring(ls, tv, sep);
-	return TK_string;
-      } else if (sep == -1) {
-	return '[';
-      } else {
-	lj_lex_error(ls, TK_string, LJ_ERR_XLDELIM);
-	continue;
+      case '[': {
+        int sep = lex_skipeq(ls);
+        if (sep >= 0) {
+          lex_longstring(ls, tv, sep);
+          return TK_string;
+        } else if (sep == -1) {
+          return '[';
+        } else {
+          lj_lex_error(ls, TK_string, LJ_ERR_XLDELIM);
+          continue;
+        }
       }
+      case '=':
+        lex_next(ls);
+        if (ls->c != '=') return '='; else { lex_next(ls); return TK_eq; }
+      case '<':
+        lex_next(ls);
+        if (ls->c != '=') return '<'; else { lex_next(ls); return TK_le; }
+      case '>':
+        lex_next(ls);
+        if (ls->c != '=') return '>'; else { lex_next(ls); return TK_ge; }
+      case '~':
+        lex_next(ls);
+        if (ls->c != '=') return '~'; else { lex_next(ls); return TK_ne; }
+      case ':':
+        lex_next(ls);
+        if (ls->c != ':') return ':'; else { lex_next(ls); return TK_label; }
+      case '"':
+      case '\'':
+        lex_string(ls, tv);
+        return TK_string;
+      case '.':
+        if (lex_savenext(ls) == '.') {
+          lex_next(ls);
+          if (ls->c == '.') {
+            lex_next(ls);/* @todo: custom operators. encoding of operators should definitely be here */
+            return TK_dots;   /* ... */
+          }
+          return TK_concat;   /* .. */
+        } else if (!lj_char_isdigit(ls->c)) {
+          return '.';
+        } else {
+          lex_number(ls, tv);
+          return TK_number;
+        }
+      case LEX_EOF:
+        return TK_eof;
+      default: {
+        LexChar c = ls->c;
+        lex_next(ls);
+        return c;  /* Single-char tokens (+ - / ...). */
       }
-    case '=':
-      lex_next(ls);
-      if (ls->c != '=') return '='; else { lex_next(ls); return TK_eq; }
-    case '<':
-      lex_next(ls);
-      if (ls->c != '=') return '<'; else { lex_next(ls); return TK_le; }
-    case '>':
-      lex_next(ls);
-      if (ls->c != '=') return '>'; else { lex_next(ls); return TK_ge; }
-    case '~':
-      lex_next(ls);
-      if (ls->c != '=') return '~'; else { lex_next(ls); return TK_ne; }
-    case ':':
-      lex_next(ls);
-      if (ls->c != ':') return ':'; else { lex_next(ls); return TK_label; }
-    case '"':
-    case '\'':
-      lex_string(ls, tv);
-      return TK_string;
-    case '.':
-      if (lex_savenext(ls) == '.') {
-	lex_next(ls);
-	if (ls->c == '.') {
-	  lex_next(ls);
-	  return TK_dots;   /* ... */
-	}
-	return TK_concat;   /* .. */
-      } else if (!lj_char_isdigit(ls->c)) {
-	return '.';
-      } else {
-	lex_number(ls, tv);
-	return TK_number;
-      }
-    case LEX_EOF:
-      return TK_eof;
-    default: {
-      LexChar c = ls->c;
-      lex_next(ls);
-      return c;  /* Single-char tokens (+ - / ...). */
-    }
     }
   }
+}
+
+/* @todo: custom operators. encoding of operators should definitely be here */
+/* @todo: consistent style for modified functions of lexer and parser, probably _lua or _luar instead of out-of-style numbers */
+static LexToken lex_scan1(LexState *ls, TValue *tv)
+{
+  lj_buf_reset(&ls->sb);
+  for (;;) {
+    if (lj_char_isident(ls->c)) {
+      GCstr *s;
+      if (lj_char_isdigit(ls->c)) {  /* Numeric literal. */
+        lex_number(ls, tv);
+        return TK_number;
+      }
+      /* Identifier or reserved word. */
+      do {
+        lex_savenext(ls);
+      } while (lj_char_isident(ls->c));
+      s = lj_parse_keepstr(ls, ls->sb.b, sbuflen(&ls->sb));
+      setstrV(ls->L, tv, s);
+      if (s->reserved > 0)  /* Reserved word? */
+        return TK_OFS + s->reserved;
+      return TK_name;
+    }
+    switch (ls->c) {
+      case '\n':
+      case '\r':
+        lex_newline(ls);
+        continue;
+      case ' ':
+      case '\t':
+      case '\v':
+      case '\f':
+        lex_next(ls);
+        continue;
+      case '-':
+        lex_next(ls);
+        if (ls->c != '-') return '-';
+        lex_next(ls);
+      if (ls->c == '[') {  /* Long comment "--[=*[...]=*]". */
+        int sep = lex_skipeq(ls);
+        lj_buf_reset(&ls->sb);  /* `lex_skipeq' may dirty the buffer */
+        if (sep >= 0) {
+          lex_longstring(ls, NULL, sep);
+          lj_buf_reset(&ls->sb);
+          continue;
+        }
+      }
+      /* Short comment "--.*\n". */
+      while (!lex_iseol(ls) && ls->c != LEX_EOF)
+        lex_next(ls);
+      continue;
+      case '[': {
+        int sep = lex_skipeq(ls);
+        if (sep >= 0) {
+          lex_longstring(ls, tv, sep);
+          return TK_string;
+        } else if (sep == -1) {
+          return '[';
+        } else {
+          lj_lex_error(ls, TK_string, LJ_ERR_XLDELIM);
+          continue;
+        }
+      }
+      case '=':
+        lex_next(ls);
+        if (ls->c != '=') return '='; else { lex_next(ls); return TK_eq; }
+      case '<':
+        lex_next(ls);
+        if (ls->c != '=') return '<'; else { lex_next(ls); return TK_le; }
+      case '>':
+        lex_next(ls);
+        if (ls->c != '=') return '>'; else { lex_next(ls); return TK_ge; }
+      case '~':
+        lex_next(ls);
+        if (ls->c != '=') return '~'; else { lex_next(ls); return TK_ne; }
+      case ':':
+        lex_next(ls);
+        if (ls->c != ':') return ':'; else { lex_next(ls); return TK_label; }
+      case '"':
+      case '\'':
+        lex_string(ls, tv);
+        return TK_string;
+      case '.':
+        if (lex_savenext(ls) == '.') {
+          lex_next(ls);
+          if (ls->c == '.') {
+            lex_next(ls);
+            return TK_dots;   /* ... */
+          }
+          return TK_concat;   /* .. */
+        } else if (!lj_char_isdigit(ls->c)) {
+          return '.';
+        } else {
+          lex_number(ls, tv);
+          return TK_number;
+        }
+      case LEX_EOF:
+        return TK_eof;
+      default: {
+        LexChar c = ls->c;
+        lex_next(ls);
+        return c;  /* Single-char tokens (+ - / ...). */
+      }
+    }
+  }
+}
+
+/* Get next lexical token. */
+static LJ_AINLINE LexToken lex_scan(LexState *ls, TValue *tv)
+{
+  global_State *g = G(ls->L);
+  if (g->pars.mode) return lex_scan1(ls, tv);
+  return lex_scan0(ls, tv);
 }
 
 /* -- Lexer API ----------------------------------------------------------- */
@@ -511,6 +625,20 @@ void lj_lex_error(LexState *ls, LexToken tok, ErrMsg em, ...)
   va_end(argp);
 }
 
+/* A function to manipulate syntax mode in runtime
+ * because it's sometimes not enough to use parser directives
+ */
+static int syntaxmode_manip(lua_State *L)
+{
+  int n = lua_gettop(L);
+  if (!n) {
+    lua_pushinteger(L, lua_getsyntaxmode(L));
+    return 1;
+  }
+  lua_setsyntaxmode(L, lua_tointeger(L, 1));
+  return 0;
+}
+
 /* Initialize strings for reserved words. */
 void lj_lex_init(lua_State *L)
 {
@@ -529,20 +657,6 @@ void lj_lex_init(lua_State *L)
     s->reserved = (uint8_t)(i+1);
   }
   lj_assertG(g->pars.fnstr != NULL && g->pars.funcstr != NULL);
-}
-
-void lj_lex_fswitch(lua_State *L, uint8_t mode)
-{
-  lj_assertX(index < 2, "bad syntax");
-  global_State *g = G(L);
-  ParserState *ps = &g->pars;
-  if (ps->mode == mode) return;
-  ps->mode = mode;
-  if (mode == 1) {
-    ps->fnstr->reserved = ps->funcstr->reserved;
-    ps->funcstr->reserved = 0;
-  } else {
-    ps->funcstr->reserved = ps->fnstr->reserved;
-    ps->fnstr->reserved = 0;
-  }
+  lua_pushcfunction(L, syntaxmode_manip);
+  lua_setglobal(L, "__syntax_mode");
 }

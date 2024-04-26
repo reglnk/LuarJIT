@@ -356,6 +356,10 @@ LUA_API lua_Integer lua_tointegerx (lua_State *L, int idx, int *isnum);
 /* From Lua 5.3. */
 LUA_API int lua_isyieldable (lua_State *L);
 
+/* Extensions. */
+LUA_API int lua_getsyntaxmode (lua_State *L);
+LUA_API void lua_setsyntaxmode (lua_State *L, int mode);
+
 
 struct lua_Debug {
   int event;

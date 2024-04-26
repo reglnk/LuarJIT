@@ -84,7 +84,6 @@ LJ_FUNC LexToken lj_lex_lookahead(LexState *ls);
 LJ_FUNC const char *lj_lex_token2str(LexState *ls, LexToken tok);
 LJ_FUNC_NORET void lj_lex_error(LexState *ls, LexToken tok, ErrMsg em, ...);
 LJ_FUNC void lj_lex_init(lua_State *L);
-LJ_FUNC void lj_lex_fswitch(lua_State *L, uint8_t index);
 
 
 #ifdef LUA_USE_ASSERT
