@@ -27,7 +27,6 @@
 #include "lj_parse.h"
 #include "lj_vm.h"
 #include "lj_vmevent.h"
-#include "stdio.h"
 
 /* -- Parser structures and definitions ----------------------------------- */
 
@@ -688,6 +687,24 @@ static void bcemit_method(FuncState *fs, ExpDesc *e, ExpDesc *key)
   e->k = VNONRELOC;
 }
 
+static void assign_adjust(LexState *ls, BCReg nvars, BCReg nexps, ExpDesc *e);
+
+/* Emit infix operator expression */
+static void bcemit_infix(FuncState *fs, ExpDesc *e, ExpDesc *f)
+{
+  BCReg obj = expr_toanyreg(fs, e);
+  expr_free(fs, e); // error here
+  BCReg func = fs->freereg;
+  BCReg fr2 = fs->ls->fr2;
+
+  bcemit_AD(fs, BC_MOV, func+1+fr2, obj);  /* Copy object to 1st argument. */
+  expr_tonextreg(fs, f);
+  bcreg_reserve(fs, 1 + fr2);
+
+  e->u.s.info = func;
+  e->k = VNONRELOC;
+}
+
 /* -- Bytecode emitter for branches --------------------------------------- */
 
 /* Emit unconditional branch. */
@@ -1034,7 +1051,7 @@ static void lex_match(LexState *ls, LexToken what, LexToken who, BCLine line)
 static GCstr *lex_str(LexState *ls)
 {
   GCstr *s;
-  if (ls->tok != TK_name && (LJ_52 || ls->tok != TK_goto))
+  if (ls->tok != TK_name && ls->tok != TK_operator && (LJ_52 || ls->tok != TK_goto))
     err_token(ls, TK_name);
   s = strV(&ls->tokval);
   lj_lex_next(ls);
@@ -1960,6 +1977,58 @@ static void parse_args(LexState *ls, ExpDesc *e)
   fs->freereg = base+1;  /* Leave one result by default. */
 }
 
+/* Forward declaration. */
+static BinOpr expr_binop(LexState *ls, ExpDesc *v, uint32_t limit);
+
+static int parse_infix_isend(LexToken tok)
+{
+  switch (tok)
+  {
+    case TK_else: case TK_elseif: case TK_until: case TK_eof:
+    case TK_do:   case TK_in:     case TK_for:   case TK_while:
+    case TK_and:  case TK_or:     case ';':      case '}':
+    case ')':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+/* minimized version of above function, just parses 1 argument without brackets or empty argument */
+static void parse_infix_rhs(LexState *ls, ExpDesc *e, unsigned limit, int isOper)
+{
+  FuncState *fs = ls->fs;
+  ExpDesc arg;
+  BCIns ins;
+  BCReg base;
+  BCLine line = ls->linenumber;
+  if (parse_infix_isend(ls->tok)) {
+    if (!isOper) {
+      err_syntax(ls, LJ_ERR_XSYNTAX);
+      lj_lex_next(ls);
+      return;
+    }
+    arg.k = VVOID;
+  } else {
+    expr_binop(ls, &arg, limit);
+    if (arg.k == VCALL)  /* f(a, b, g()) or f(a, b, ...). */
+      setbc_b(bcptr(fs, &arg), 0);  /* Pass on multiple results. */
+  }
+  lj_assertFS(e->k == VNONRELOC, "bad expr type %d", e->k);
+  base = e->u.s.info;  /* Base register for call. */
+  if (arg.k == VCALL) {
+    ins = BCINS_ABC(BC_CALLM, base, 2, arg.u.s.aux - base - 1 - ls->fr2);
+  } else {
+    if (arg.k != VVOID)
+      expr_tonextreg(fs, &arg);
+    ins = BCINS_ABC(BC_CALL, base, 2, fs->freereg - base - ls->fr2);
+  }
+  expr_init(e, VCALL, bcemit_INS(fs, ins));
+  e->u.s.aux = base;
+  fs->bcbase[fs->pc - 1].line = line;
+  fs->freereg = base+1;  /* Leave one result by default. */
+}
+
 /* Parse primary expression. */
 static void expr_primary(LexState *ls, ExpDesc *v)
 {
@@ -1971,7 +2040,7 @@ static void expr_primary(LexState *ls, ExpDesc *v)
     expr(ls, v);
     lex_match(ls, ')', '(', line);
     expr_discharge(ls->fs, v);
-  } else if (ls->tok == TK_name || (!LJ_52 && ls->tok == TK_goto)) {
+  } else if (ls->tok == TK_name || ls->tok == TK_operator || (!LJ_52 && ls->tok == TK_goto)) {
     var_lookup(ls, v);
   } else {
     err_syntax(ls, LJ_ERR_XSYMBOL);
@@ -2063,7 +2132,7 @@ static BinOpr token2binop(LexToken tok)
   case '*':	return OPR_MUL;
   case '/':	return OPR_DIV;
   case '%':	return OPR_MOD;
-  case '^':	return OPR_POW;
+  case TK_pow:	return OPR_POW;
   case TK_concat: return OPR_CONCAT;
   case TK_ne:	return OPR_NE;
   case TK_eq:	return OPR_EQ;
@@ -2091,9 +2160,6 @@ static const struct {
 
 #define UNARY_PRIORITY		8  /* Priority for unary operators. */
 
-/* Forward declaration. */
-static BinOpr expr_binop(LexState *ls, ExpDesc *v, uint32_t limit);
-
 /* Parse unary expression. */
 static void expr_unop(LexState *ls, ExpDesc *v)
 {
@@ -2118,19 +2184,43 @@ static void expr_unop(LexState *ls, ExpDesc *v)
 /* Parse binary expressions with priority higher than the limit. */
 static BinOpr expr_binop(LexState *ls, ExpDesc *v, uint32_t limit)
 {
+  global_State *g = G(ls->L);
   BinOpr op;
   synlevel_begin(ls);
   expr_unop(ls, v);
-  op = token2binop(ls->tok);
-  while (op != OPR_NOBINOPR && priority[op].left > limit) {
-    ExpDesc v2;
-    BinOpr nextop;
-    lj_lex_next(ls);
-    bcemit_binop_left(ls->fs, op, v);
-    /* Parse binary expression with higher priority. */
-    nextop = expr_binop(ls, &v2, priority[op].right);
-    bcemit_binop(ls->fs, op, v, &v2);
-    op = nextop;
+  if (!g->pars.mode) {
+    op = token2binop(ls->tok);
+    while (op != OPR_NOBINOPR && priority[op].left > limit) {
+      ExpDesc v2;
+      BinOpr nextop;
+      lj_lex_next(ls);
+      bcemit_binop_left(ls->fs, op, v);
+      /* Parse binary expression with higher priority. */
+      nextop = expr_binop(ls, &v2, priority[op].right);
+      bcemit_binop(ls->fs, op, v, &v2);
+      op = nextop;
+    }
+  }
+  else for (;;) {
+    if ((ls->tok == TK_name || ls->tok == TK_operator) && limit < 1) {
+      ExpDesc func;
+      var_lookup(ls, &func);
+      bcemit_infix(ls->fs, v, &func);
+      parse_infix_rhs(ls, v, 1, ls->tok == TK_operator);
+      continue;
+    }
+    if ((op = token2binop(ls->tok)) != OPR_NOBINOPR && priority[op].left > limit) {
+      ExpDesc v2;
+      BinOpr nextop;
+      lj_lex_next(ls);
+      bcemit_binop_left(ls->fs, op, v);
+      /* Parse binary expression with higher priority. */
+      nextop = expr_binop(ls, &v2, priority[op].right);
+      bcemit_binop(ls->fs, op, v, &v2);
+      op = nextop;
+      continue;
+    }
+    break;
   }
   synlevel_end(ls);
   return op;  /* Return unconsumed binary operator (if any). */
@@ -2269,38 +2359,47 @@ static void parse_call_assign_lua(LexState *ls)
 /* combined binop & traditional call-assign statement, so that
  * parsing single statements of form 'a + whatever' is allowed
  */
+
 static void parse_call_assign_luar(LexState *ls)
 {
   FuncState *fs = ls->fs;
   LHSVarList vl;
-  synlevel_begin(ls);
   expr_primary(ls, &vl.v);
   if (vl.v.k == VCALL) {  /* Function call statement. */
     setbc_b(bcptr(fs, &vl.v), 1);  /* No results. */
-    synlevel_end(ls);
     return;
   }
+
   vl.prev = NULL;
-  BinOpr op;
-  op = token2binop(ls->tok);
-  if (op == OPR_NOBINOPR) {
+  if (ls->tok == ',' || ls->tok == '=') {
     parse_assignment(ls, &vl, 1);
-    synlevel_end(ls);
     return;
   }
-  while (op != OPR_NOBINOPR && priority[op].left > 0) {
-    ExpDesc v2;
-    BinOpr nextop;
-    lj_lex_next(ls);
-    bcemit_binop_left(ls->fs, op, &vl.v);
-    /* Parse binary expression with higher priority. */
-    nextop = expr_binop(ls, &v2, priority[op].right);
-    bcemit_binop(ls->fs, op, &vl.v, &v2);
-    op = nextop;
+
+  synlevel_begin(ls);
+  BinOpr op;
+  for (;;) {
+    if (ls->tok == TK_name || ls->tok == TK_operator) {
+      ExpDesc func;
+      var_lookup(ls, &func);
+      bcemit_infix(ls->fs, &vl.v, &func);
+      parse_infix_rhs(ls, &vl.v, 1, ls->tok == TK_operator);
+      continue;
+    }
+    if ((op = token2binop(ls->tok)) != OPR_NOBINOPR) {
+      ExpDesc v2;
+      BinOpr nextop;
+      lj_lex_next(ls);
+      bcemit_binop_left(ls->fs, op, &vl.v);
+      /* Parse binary expression with higher priority. */
+      nextop = expr_binop(ls, &v2, priority[op].right);
+      bcemit_binop(ls->fs, op, &vl.v, &v2);
+      op = nextop;
+      continue;
+    }
+    break;
   }
   synlevel_end(ls);
-
-  /* perhaps that thing works with 0 assignment destinations */
   assign_adjust(ls, 0, 1, &vl.v);
 }
 
@@ -2383,7 +2482,7 @@ static int parse_isend(LexToken tok)
 }
 
 /* Check for end of block (c-like syntax). */
-static int parse_isend_s1(LexToken tok)
+static int parse_isend_luar(LexToken tok)
 {
   switch (tok) {
   case TK_else: case TK_elseif: case TK_until: case TK_eof: case '}':
@@ -2859,7 +2958,7 @@ static void parse_chunk(LexState *ls)
   switch (g->pars.mode) {
     default:
     case 0: isendFn = parse_isend; break;
-    case 1: isendFn = parse_isend_s1; break;
+    case 1: isendFn = parse_isend_luar; break;
   }
 
   int islast = 0;
@@ -2915,12 +3014,11 @@ static int parse_chunk_optret(LexState *ls)
     if (ls->tok != '}') lex_match(ls, '}', '{', line);
     return 1;
   }
-  if (lex_opt(ls, ';')) {
+  if (ls->tok == ';') {
     return 0;
   }
   /* synlevel_begin(ls); */
   parse_return(ls);
-  lex_opt(ls, ';');
   lj_assertLS (
     ls->fs->framesize >= ls->fs->freereg &&
     ls->fs->freereg >= ls->fs->nactvar,

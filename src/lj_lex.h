@@ -16,9 +16,9 @@
   _(and) _(break) _(do) _(else) _(elseif) _(end) _(false) \
   _(for) _(function) _(fn) _(goto) _(if) _(in) _(local) _(nil) _(not) _(or) \
   _(repeat) _(return) _(then) _(true) _(until) _(while) \
-  __(concat, ..) __(dots, ...) __(eq, ==) __(ge, >=) __(le, <=) __(ne, ~=) \
+  __(pow, ^^) __(concat, ..) __(dots, ...) __(eq, ==) __(ge, >=) __(le, <=) __(ne, ~=) \
   __(label, ::) __(number, <number>) __(name, <name>) __(string, <string>) \
-  __(eof, <eof>)
+  __(operator, <operator>) __(eof, <eof>)
 
 enum {
   TK_OFS = 256,
