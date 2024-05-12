@@ -265,7 +265,73 @@ j = obj--
 ```
 Also don't forget that, in order not to parse `[luar]` or `[lua]` as indexing, they should sometimes be preceded with semicolon.
 
-## 8. Conclusion
+## 8. New API and builtin functions
+
+There's new function with signature
+```c
+LUA_API void lua_setsyntaxmode(lua_State *L, int mode);
+```
+Pass in 0 to switch to usual Lua syntax, and 1 for new syntax.
+This function affects luaL_loadfile, luaL_loadstring and all functions that parse code.
+
+Also, the function __syntax_mode is added to global variables that, if called without arguments, returns current mode,
+or, if provided with valid mode number, sets it at runtime. Mode mapping is the same as in lua_setsyntaxmode.
+
+That's the reference implementation of function to correctly import plain Lua modules:
+```luar
+local require = require; fn luaimport(pkg)
+{
+	local prevmode = __syntax_mode();
+	if (prevmode == 1)
+		__syntax_mode(0);
+	local stuff = require(pkg);
+	__syntax_mode(prevmode);
+	return stuff;
+}
+```
+
+### tl;dr (why the only way to correctly import modules of both types is to switch the parser modes in runtime)
+Say you want to import "foo.lua" with contents
+```lua
+function foo(a)
+    return a * a
+end
+```
+into that code:
+```luar
+require "foo";
+print(foo(5));
+```
+
+And instead `25`, the output is some errors from "foo.lua", because it's not parsed as plain Lua.
+The following (1) won't work:
+```luar
+// main.luar
+[lua]
+require "foo";
+[luar]
+print(foo(5));
+```
+
+But the following (2) will do, with some exception:
+```luar
+// main.luar
+require "foo";
+print(foo(5));
+[lua]
+```
+The exception is that you won't be able to import both Lua and Luar modules in such way.
+That's all because `[lua]` / `[luar]` directives work at the time when the main code is parsed
+(not including the content of "foo.lua"), and in first case:
+- parser switches to lua
+- parses `require "foo"`
+- then switches to luar
+- parses `print(foo(5))`
+- then the code gets executed, and `require "foo"` gets parsed with mode 1.
+
+As you probably have guessed, all the difference is that in second case the parser finishes the main.luar with mode 0.
+
+## 9. Conclusion
 
 You might say it's better just to have a language with curly brackets and without these silly `;` everywhere,
 and you would be right for Lua dialect, but I planned this as a something more.
