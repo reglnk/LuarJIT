@@ -831,4 +831,5 @@ void lj_lex_init(lua_State *L)
   lj_assertG(g->pars.fnstr != NULL && g->pars.funcstr != NULL, "lexer initialization error");
   lua_pushcfunction(L, syntaxmode_manip);
   lua_setglobal(L, "__syntax_mode");
+  lua_setsyntaxmode(L, 1); /* new style as default */
 }

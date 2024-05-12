@@ -1984,9 +1984,34 @@ static int parse_infix_isend(LexToken tok)
 {
   switch (tok)
   {
-    case TK_else: case TK_elseif: case TK_until: case TK_eof:
-    case TK_do:   case TK_in:     case TK_for:   case TK_while:
-    case TK_and:  case TK_or:     case ';':      case '}':
+    case TK_and:
+    case TK_break:
+    case TK_do:
+    case TK_else:
+    case TK_elseif:
+    case TK_for:
+    case TK_goto:
+    case TK_if:
+    case TK_in:
+    case TK_local:
+    case TK_or:
+    case TK_repeat:
+    case TK_return:
+    case TK_then:
+    case TK_until:
+    case TK_while:
+
+    case TK_pow:
+    case TK_concat:
+    case TK_eq:
+    case TK_ge:
+    case TK_le:
+    case TK_ne:
+    case TK_label:
+
+    case TK_eof:
+    case ';':
+    case '}':
     case ')':
       return 1;
     default:
@@ -2202,11 +2227,12 @@ static BinOpr expr_binop(LexState *ls, ExpDesc *v, uint32_t limit)
     }
   }
   else for (;;) {
-    if ((ls->tok == TK_name || ls->tok == TK_operator) && limit < 1) {
+    int isOper = ls->tok == TK_operator;
+    if ((isOper || ls->tok == TK_name) && limit < 1) {
       ExpDesc func;
       var_lookup(ls, &func);
       bcemit_infix(ls->fs, v, &func);
-      parse_infix_rhs(ls, v, 1, ls->tok == TK_operator);
+      parse_infix_rhs(ls, v, 1, isOper);
       continue;
     }
     if ((op = token2binop(ls->tok)) != OPR_NOBINOPR && priority[op].left > limit) {
@@ -2379,11 +2405,12 @@ static void parse_call_assign_luar(LexState *ls)
   synlevel_begin(ls);
   BinOpr op;
   for (;;) {
-    if (ls->tok == TK_name || ls->tok == TK_operator) {
+    int isOper = ls->tok == TK_operator;
+    if (isOper || ls->tok == TK_name) {
       ExpDesc func;
       var_lookup(ls, &func);
       bcemit_infix(ls->fs, &vl.v, &func);
-      parse_infix_rhs(ls, &vl.v, 1, ls->tok == TK_operator);
+      parse_infix_rhs(ls, &vl.v, 1, isOper);
       continue;
     }
     if ((op = token2binop(ls->tok)) != OPR_NOBINOPR) {
