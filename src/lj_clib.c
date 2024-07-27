@@ -147,6 +147,7 @@ static void *clib_getsym(CLibrary *cl, const char *name)
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdio.h>
 
 #ifndef GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS	4
@@ -183,10 +184,13 @@ LJ_NORET LJ_NOINLINE static void clib_error(lua_State *L, const char *fmt,
       !WideCharToMultiByte(CP_ACP, 0, wbuf, 128, buf, 128*2, NULL, NULL))
 #else
   char buf[128];
+  sprintf(buf, "Error code: %u. ", err);
+  int slen = strlen(buf);
   if (!FormatMessageA(FORMAT_MESSAGE_IGNORE_INSERTS|FORMAT_MESSAGE_FROM_SYSTEM,
-		      NULL, err, 0, buf, sizeof(buf), NULL))
+		      NULL, err, 0, buf + slen, sizeof(buf) - slen, NULL))
 #endif
-    buf[0] = '\0';
+    strcpy(buf + slen - 1, "\r\n");
+
   lj_err_callermsg(L, lj_strfmt_pushf(L, fmt, name, buf));
 }
 
@@ -212,7 +216,9 @@ static void *clib_loadlib(lua_State *L, const char *name, int global)
 {
   DWORD oldwerr = GetLastError();
   void *h = LJ_WIN_LOADLIBA(clib_extname(L, name));
-  if (!h) clib_error(L, "cannot load module " LUA_QS ": %s", name);
+  if (!h) {
+    clib_error(L, "cannot load module " LUA_QS ": %s", name);
+  };
   SetLastError(oldwerr);
   UNUSED(global);
   return h;
