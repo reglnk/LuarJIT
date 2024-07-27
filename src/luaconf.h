@@ -22,6 +22,8 @@
 #define LUA_CDIR	"!\\"
 #define LUA_PATH_DEFAULT \
   ".\\?.lua;" LUA_LDIR"?.lua;" LUA_LDIR"?\\init.lua;"
+#define LUA_RPATH_DEFAULT \
+  ".\\?.luar;" LUA_LDIR"?.luar;" LUA_LDIR"?\\init.luar;"
 #define LUA_CPATH_DEFAULT \
   ".\\?.dll;" LUA_CDIR"?.dll;" LUA_CDIR"loadall.dll"
 #else
@@ -44,26 +46,32 @@
 #define LUA_RLDIR	LUA_ROOT "/share" LUA_LUADIR
 #define LUA_RCDIR	LUA_ROOT "/" LUA_MULTILIB LUA_LUADIR
 #define LUA_RLPATH	";" LUA_RLDIR "?.lua;" LUA_RLDIR "?/init.lua"
+#define LUAR_RLPATH	";" LUA_RLDIR "?.luar;" LUA_RLDIR "?/init.luar"
 #define LUA_RCPATH	";" LUA_RCDIR "?.so"
 #else
 #define LUA_JROOT	LUA_LROOT
 #define LUA_RLPATH
+#define LUAR_RLPATH
 #define LUA_RCPATH
 #endif
 
 #define LUA_JPATH	";" LUA_JROOT "/share" LUA_LJDIR "?.lua"
+#define LUAR_JPATH	";" LUA_JROOT "/share" LUA_LJDIR "?.luar"
 #define LUA_LLDIR	LUA_LROOT "/share" LUA_LUADIR
 #define LUA_LCDIR	LUA_LROOT "/" LUA_LMULTILIB LUA_LUADIR
 #define LUA_LLPATH	";" LUA_LLDIR "?.lua;" LUA_LLDIR "?/init.lua"
+#define LUAR_LLPATH	";" LUA_LLDIR "?.luar;" LUA_LLDIR "?/init.luar"
 #define LUA_LCPATH1	";" LUA_LCDIR "?.so"
 #define LUA_LCPATH2	";" LUA_LCDIR "loadall.so"
 
 #define LUA_PATH_DEFAULT	"./?.lua" LUA_JPATH LUA_LLPATH LUA_RLPATH
+#define LUA_RPATH_DEFAULT	"./?.luar" LUAR_JPATH LUAR_LLPATH LUAR_RLPATH
 #define LUA_CPATH_DEFAULT	"./?.so" LUA_LCPATH1 LUA_RCPATH LUA_LCPATH2
 #endif
 
 /* Environment variable names for path overrides and initialization code. */
 #define LUA_PATH	"LUA_PATH"
+#define LUA_RPATH	"LUA_RPATH"
 #define LUA_CPATH	"LUA_CPATH"
 #define LUA_INIT	"LUA_INIT"
 

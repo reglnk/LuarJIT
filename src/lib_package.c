@@ -378,6 +378,17 @@ static int lj_cf_package_loader_lua(lua_State *L)
   return 1;  /* library loaded successfully */
 }
 
+static int lj_cf_package_loader_luar(lua_State *L)
+{
+  const char *filename;
+  const char *name = luaL_checkstring(L, 1);
+  filename = findfile(L, name, "rpath");
+  if (filename == NULL) return 1;  /* library not found in this path */
+    if (luaL_loadfile(L, filename) != 0)
+      loaderror(L, filename);
+  return 1;  /* library loaded successfully */
+}
+
 static int lj_cf_package_loader_c(lua_State *L)
 {
   const char *name = luaL_checkstring(L, 1);
@@ -585,6 +596,7 @@ static const lua_CFunction package_loaders[] =
 {
   lj_cf_package_loader_preload,
   lj_cf_package_loader_lua,
+  lj_cf_package_loader_luar,
   lj_cf_package_loader_c,
   lj_cf_package_loader_croot,
   NULL
@@ -613,6 +625,7 @@ LUALIB_API int luaopen_package(lua_State *L)
   noenv = lua_toboolean(L, -1);
   lua_pop(L, 1);
   setpath(L, "path", LUA_PATH, LUA_PATH_DEFAULT, noenv);
+  setpath(L, "rpath", LUA_RPATH, LUA_RPATH_DEFAULT, noenv);
   setpath(L, "cpath", LUA_CPATH, LUA_CPATH_DEFAULT, noenv);
   lua_pushliteral(L, LUA_PATH_CONFIG);
   lua_setfield(L, -2, "config");

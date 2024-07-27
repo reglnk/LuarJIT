@@ -27,7 +27,6 @@
 #include "lj_char.h"
 #include "lj_strscan.h"
 #include "lj_strfmt.h"
-#include <stdio.h>
 
 /* Lua lexer token names. */
 static const char *const tokennames[] = {
@@ -167,7 +166,7 @@ static int lex_skipeq_luar(LexState *ls, int *comment)
   while (lex_next(ls) == '/' && *comment < 2)
     ++*comment;
   if (*comment == 1) {
-    lj_lex_error(ls, TK_operator, LJ_ERR_XSYNTAX);
+    lj_lex_error(ls, 0, LJ_ERR_XSYNTAX);
     lex_next(ls);
     return -1;
   }
@@ -462,9 +461,6 @@ static LexToken lex_scan_lua(LexState *ls, TValue *tv)
 }
 
 /* encodes a custom operator symbol */
-/* @todo: a substitution ~
- * also, the ~ may be included only if isn't ambiguous with a substitution ~
- */
 static LJ_AINLINE char luar_char_oper_toident(char ch)
 {
   switch (ch) {
@@ -478,10 +474,10 @@ static LJ_AINLINE char luar_char_oper_toident(char ch)
     case '|': return 'j'; /* disJunction */
     case '^': return 'x';
     case '!': return 'k';
-    case '?': return 'q';
     case '=': return 'e';
     case '<': return 'o';
     case '>': return 'p';
+    case '.': return 't';
     default:
       return 0;
   }
@@ -504,10 +500,10 @@ static LJ_AINLINE const char *luar_char_oper_name(char ch)
     case '|': return "jor";
     case '^': return "xor";
     case '!': return "ex";
-    case '?': return "qu";
     case '=': return "eq";
     case '<': return "lt";
     case '>': return "gt";
+    case '.': return "fl";
     default:
       return NULL;
   }
@@ -515,29 +511,36 @@ static LJ_AINLINE const char *luar_char_oper_name(char ch)
 
 /*
  * Checks if some string is builtin Lua (Luar) operator. If so, returns it as token code.
- * Otherwise, TK_operator is returned, which means it can be used as custom operator.
+ * Otherwise, TK_oper is returned, which means it can be used as custom operator.
  */
-static LJ_AINLINE LexToken luar_string_tobuiltin(const char *s, unsigned len)
+static LJ_AINLINE LexToken luar_getoptype(const char *s, unsigned len)
 {
 #define mkop(f, s) ((int16_t)(f) | ((int16_t)(s) << 8))
-  if (len > 2) return TK_operator; /* no builtin operators longer than 2 symbols */
-  int16_t op = mkop(s[0], len > 1 ? s[1] : 0);
-  switch (op) {
+  /* no builtin operators longer than 2 symbols */
+  if (len > 2) goto ext;
+  switch (mkop(s[0], len > 1 ? s[1] : 0)) {
     case mkop('+', 0): return '+';
     case mkop('-', 0): return '-';
     case mkop('*', 0): return '*';
     case mkop('/', 0): return '/';
+    case mkop('%', 0): return '%';
     case mkop('^', '^'): return TK_pow;
     case mkop('=', 0): return '=';
     case mkop('<', 0): return '<';
     case mkop('>', 0): return '>';
     case mkop('~', 0): return '~';
+    case mkop('.', 0): return '.';
     case mkop('=', '='): return TK_eq;
     case mkop('<', '='): return TK_le;
     case mkop('>', '='): return TK_ge;
     case mkop('~', '='): return TK_ne;
+    case mkop('!', 0): return '!';
   }
-  return TK_operator;
+ext:
+  for (const char *p = s; p != s + len; ++p)
+    if (*p == '.')
+      return TK_fldoper;
+  return TK_oper;
 #undef mkop
 }
 
@@ -581,7 +584,7 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
             lex_next(ls);
           continue;
         }
-        goto default_case;
+        goto oper_encode;
       case '[': {
         int isc, sep = lex_skipeq_luar(ls, &isc);
         if (sep >= 0) {
@@ -621,8 +624,7 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
         }
       case LEX_EOF:
         return TK_eof;
-      default:
-      default_case: {
+      default: {
         LexChar c = ls->c;
         if (luar_char_oper_toident(c))
         {
@@ -635,7 +637,7 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
               lex_savenext(ls);
               if (ls->c == '=') {
                 lex_savenext(ls);
-                goto custom_encode;
+                goto oper_encode;
               }
               lj_buf_reset(&ls->sb);
               return TK_eq;
@@ -644,32 +646,33 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
             return '=';
           }
           while (luar_char_oper_toident(c = lex_savenext(ls)));
-          custom_encode: {
+          oper_encode: {
             /* Encode operator chars into identifier symbols */
             /* Max symbols count written in below loop (31)
-            * + max length of operator mnemonic
-            * + 5 bytes for "__op_"
+            * + max length of operator symbol mnemonic (3)
+            * + strlen(LUAR_OPHDR)
             * + 1 byte for '\0' */
-            char enc[40] = {'_', '_', 'o', 'p', '_'};
+            char enc[35 + LUAR_OPHDR_LEN];
+            memcpy(enc, LUAR_OPHDR, LUAR_OPHDR_LEN);
             unsigned sbl = sbuflen(&ls->sb);
             const char *b = ls->sb.b;
-            LexToken op = luar_string_tobuiltin(b, sbl);
-            if (op != TK_operator) {
+            LexToken op = luar_getoptype(b, sbl);
+            if (op != TK_oper && op != TK_fldoper) {
               lj_buf_reset(&ls->sb);
               return op;
             }
             if (sbl > 32) {
               lj_buf_reset(&ls->sb);
-              lj_lex_error(ls, TK_operator, LJ_ERR_XLOP);
+              lj_lex_error(ls, op, LJ_ERR_XLOP);
               continue;
             }
             for (unsigned i = sbl; --i; ) {
-              enc[sbl - i + 4] = luar_char_oper_toident(b[i]);
+              enc[sbl - i + LUAR_OPHDR_LEN - 1] = luar_char_oper_toident(b[i]);
             }
-            strcpy(enc + sbl + 4, luar_char_oper_name(b[0]));
+            strcpy(enc + sbl + LUAR_OPHDR_LEN - 1, luar_char_oper_name(b[0]));
             lj_buf_reset(&ls->sb);
             setstrV(ls->L, tv, lj_parse_keepstr(ls, enc, strlen(enc)));
-            return TK_operator;
+            return op;
           }
         }
         lex_next(ls);
@@ -683,8 +686,9 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
 static LJ_AINLINE LexToken lex_scan(LexState *ls, TValue *tv)
 {
   global_State *g = G(ls->L);
-  if (g->pars.mode) return lex_scan_luar(ls, tv);
-  return lex_scan_lua(ls, tv);
+  return g->pars.mode
+  ? lex_scan_luar(ls, tv)
+  : lex_scan_lua(ls, tv);
 }
 
 /* -- Lexer API ----------------------------------------------------------- */
@@ -820,16 +824,19 @@ void lj_lex_init(lua_State *L)
   for (i = 0; i < TK_RESERVED; i++) {
     GCstr *s = lj_str_newz(L, tokennames[i]);
     fixstring(s);  /* Reserved words are never collected. */
-    if (tokennums[i] == (uint8_t)TK_function)
-      g->pars.funcstr = s;
-    else if (tokennums[i] == (uint8_t)TK_fn) {
-      g->pars.fnstr = s;
-      continue;
+    switch (tokennums[i]) {
+      case (uint8_t)TK_function:
+	g->pars.funcstr = s;
+	break;
+      case (uint8_t)TK_fn:
+	g->pars.fnstr = s;
+	continue;
+      case (uint8_t)TK_operator:
+	g->pars.operstr = s;
+	continue;
     }
-    s->reserved = (uint8_t)(i+1);
+    s->reserved = lj_lex_token2reserved(tokennums[i]);
   }
-  lj_assertG(g->pars.fnstr != NULL && g->pars.funcstr != NULL, "lexer initialization error");
   lua_pushcfunction(L, syntaxmode_manip);
   lua_setglobal(L, "__syntax_mode");
-  lua_setsyntaxmode(L, 1); /* new style as default */
 }

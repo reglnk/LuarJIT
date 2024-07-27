@@ -10,6 +10,7 @@
 #define LUA_CORE
 
 #include "lj_obj.h"
+#include "lj_lex.h"
 #include "lj_gc.h"
 #include "lj_err.h"
 #include "lj_debug.h"
@@ -1332,10 +1333,12 @@ LUA_API void lua_setsyntaxmode(lua_State *L, int mode)
   if (ps->mode == mode) return;
   ps->mode = mode;
   if (mode == 1) {
-    ps->fnstr->reserved = ps->funcstr->reserved;
     ps->funcstr->reserved = 0;
+    ps->fnstr->reserved = lj_lex_token2reserved(TK_function); /* so that TK_fn is unused in parser */
+    ps->operstr->reserved = lj_lex_token2reserved(TK_operator);
   } else {
-    ps->funcstr->reserved = ps->fnstr->reserved;
+    ps->funcstr->reserved = lj_lex_token2reserved(TK_function);
     ps->fnstr->reserved = 0;
+    ps->operstr->reserved = 0;
   }
 }

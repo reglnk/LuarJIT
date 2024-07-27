@@ -7,6 +7,7 @@
 #define _LJ_LEX_H
 
 #include <stdarg.h>
+#include <stdint.h>
 
 #include "lj_obj.h"
 #include "lj_err.h"
@@ -15,10 +16,10 @@
 #define TKDEF(_, __) \
   _(and) _(break) _(do) _(else) _(elseif) _(end) _(false) \
   _(for) _(function) _(fn) _(goto) _(if) _(in) _(local) _(nil) _(not) _(or) \
-  _(repeat) _(return) _(then) _(true) _(until) _(while) \
+  _(repeat) _(return) _(then) _(true) _(until) _(while) _(operator) \
   __(pow, ^^) __(concat, ..) __(dots, ...) __(eq, ==) __(ge, >=) __(le, <=) __(ne, ~=) \
   __(label, ::) __(number, <number>) __(name, <name>) __(string, <string>) \
-  __(operator, <operator>) __(eof, <eof>)
+  __(oper, <operator>) __(fldoper, <field operator>) __(eof, <eof>)
 
 enum {
   TK_OFS = 256,
@@ -27,8 +28,10 @@ enum {
 TKDEF(TKENUM1, TKENUM2)
 #undef TKENUM1
 #undef TKENUM2
-  TK_RESERVED = TK_while - TK_OFS
+  TK_RESERVED = TK_operator - TK_OFS
 };
+
+#define lj_lex_token2reserved(tok) ((uint8_t)(tok - TK_OFS))
 
 typedef int LexChar;	/* Lexical character. Unsigned ext. from char. */
 typedef int LexToken;	/* Lexical token. */
@@ -91,5 +94,17 @@ LJ_FUNC void lj_lex_init(lua_State *L);
 #else
 #define lj_assertLS(c, ...)	((void)ls)
 #endif
+
+/* for infix and postfix symbolic operators */
+#define LUAR_OPHDR ("__LRop_")
+#define LUAR_OPHDR_LEN (sizeof(LUAR_OPHDR)-1)
+
+/* for field operators that participate in assignment */
+#define LUAR_AOPHDR ("__LRaop_")
+#define LUAR_AOPHDR_LEN (sizeof(LUAR_AOPHDR)-1)
+
+/* for operators with variable-like names */
+#define LUAR_VAROPHDR ("__LRvop_")
+#define LUAR_VAROPHDR_LEN (sizeof(LUAR_VAROPHDR)-1)
 
 #endif
