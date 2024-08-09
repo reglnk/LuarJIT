@@ -630,8 +630,10 @@ typedef struct StrInternState {
 typedef struct ParserState {
   int32_t mode;		/* Syntax mode. 0 = standard Lua, 1 = modified. */
   int32_t unused1;
-  GCstr *funcstr;	/* Reserved 'function' word. */
-  GCstr *fnstr;		/* Reserved 'fn' word. */
+  /* Reserved words and their fast-lookup numbers. */
+  GCstr *funcstr;	/* 'function' */
+  GCstr *fnstr;		/* 'fn' */
+  GCstr *operstr;	/* 'operator' */
 } ParserState;
 
 /* Global state, shared by all threads of a Lua universe. */

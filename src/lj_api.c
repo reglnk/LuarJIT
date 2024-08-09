@@ -10,6 +10,7 @@
 #define LUA_CORE
 
 #include "lj_obj.h"
+#include "lj_lex.h"
 #include "lj_gc.h"
 #include "lj_err.h"
 #include "lj_debug.h"
@@ -1317,25 +1318,3 @@ LUA_API void lua_setallocf(lua_State *L, lua_Alloc f, void *ud)
   g->allocf = f;
 }
 
-LUA_API int lua_getsyntaxmode(lua_State *L)
-{
-  global_State *g = G(L);
-  ParserState *ps = &g->pars;
-  return ps->mode;
-}
-
-LUA_API void lua_setsyntaxmode(lua_State *L, int mode)
-{
-  lj_assertX(mode < 2, "invalid syntax mode");
-  global_State *g = G(L);
-  ParserState *ps = &g->pars;
-  if (ps->mode == mode) return;
-  ps->mode = mode;
-  if (mode == 1) {
-    ps->fnstr->reserved = ps->funcstr->reserved;
-    ps->funcstr->reserved = 0;
-  } else {
-    ps->funcstr->reserved = ps->fnstr->reserved;
-    ps->fnstr->reserved = 0;
-  }
-}
