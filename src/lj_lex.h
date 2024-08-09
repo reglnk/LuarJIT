@@ -16,7 +16,7 @@
 #define TKDEF(_, __) \
   _(and) _(break) _(do) _(else) _(elseif) _(end) _(false) \
   _(for) _(function) _(fn) _(goto) _(if) _(in) _(local) _(nil) _(not) _(or) \
-  _(repeat) _(return) _(then) _(true) _(until) _(while) _(operator) \
+  _(repeat) _(return) _(then) _(true) _(until) _(while) _(operator) _(nameof) \
   __(pow, ^^) __(concat, ..) __(dots, ...) __(eq, ==) __(ge, >=) __(le, <=) __(ne, ~=) \
   __(label, ::) __(number, <number>) __(name, <name>) __(string, <string>) \
   __(oper, <operator>) __(fldoper, <field operator>) __(eof, <eof>)
@@ -28,7 +28,7 @@ enum {
 TKDEF(TKENUM1, TKENUM2)
 #undef TKENUM1
 #undef TKENUM2
-  TK_RESERVED = TK_operator - TK_OFS
+  TK_RESERVED = TK_nameof - TK_OFS
 };
 
 #define lj_lex_token2reserved(tok) ((uint8_t)(tok - TK_OFS))

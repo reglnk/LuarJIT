@@ -57,11 +57,13 @@ Thus,\
 
 ## Reserved words
 
-to be extended...
+_(changes only)_
 | mode 0     | mode 1   |
 | ---------- | -------- |
 | function   | fn       |
 |            | operator |
+|            | nameof   |
+| end        |          |
 
 Keyword `function` is replaced with `fn`, meanwhile the `function` becomes not reserved,
 and vice versa for when switching to classical Lua mode.
@@ -251,6 +253,35 @@ end
 print(7 ^&*^&* 7); // 0
 print(8 ^&*^&* 7); // 15
 print("qwer" ^&*^&* 5); // qwerqwerqwerqwerqwer
+```
+
+For convenient definition of custom operators as methods, the new keyword `nameof` is added.
+When beginning a primary expression, it will make the symbol name parse as a constant string.
+Some examples:
+```luar
+assert(nameof foo == "foo");
+local foo = nameof operator foo;
+local eadd = nameof +=;
+local psub = nameof operator ->;
+local tmul = nameof operator<newindex> *.;
+```
+
+Possible usage:
+```luar
+local fn defineStdOP(name) {
+	_G[name] = fn(self, a) getmetatable(self)[name](self, a);
+}
+defineStdOP(nameof +=);
+defineStdOP(nameof -=);
+
+local obj = setmetatable({v = 0}, {
+	[nameof +=] = fn(self, val) {self.v = self.v + val},
+	[nameof -=] = fn(self, val) {self.v = self.v - val}
+});
+obj += 2;
+print(obj.v); // 2
+obj -= 3;
+print(obj.v); // -1
 ```
 
 ### Extra examples

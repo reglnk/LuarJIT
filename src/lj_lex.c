@@ -835,6 +835,12 @@ void lj_lex_init(lua_State *L)
       case (uint8_t)TK_operator:
 	g->pars.operstr = s;
 	continue;
+      case (uint8_t)TK_nameof:
+	g->pars.nameof_str = s;
+	continue;
+      case (uint8_t)TK_end:
+	g->pars.end_str = s;
+	break;
     }
     s->reserved = lj_lex_token2reserved(tokennums[i]);
   }

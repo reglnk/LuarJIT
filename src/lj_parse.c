@@ -27,6 +27,7 @@
 #include "lj_parse.h"
 #include "lj_vm.h"
 #include "lj_vmevent.h"
+#include "lj_syntax.h"
 
 /* -- Parser structures and definitions ----------------------------------- */
 
@@ -2120,7 +2121,7 @@ static void parse_infix_rhs(LexState *ls, ExpDesc *e, unsigned limit, LexToken o
   bcemit_endcall(ls, e, &arg, line);
 }
 
-static void expr_primary_luar_tail(LexState *ls, ExpDesc *v, int assign)
+static void expr_primary_luar_tail(LexState *ls, ExpDesc *v)
 {
   FuncState *fs = ls->fs;
   for (;;) {
@@ -2149,7 +2150,7 @@ static void expr_primary_luar_tail(LexState *ls, ExpDesc *v, int assign)
       expr_init(&tail, VLOCAL, fs->freereg - 1);
       if (tail.u.s.info != v->u.s.info)
 	bcemit_INS(fs, BCINS_AD(BC_MOV, tail.u.s.info, v->u.s.info));
-      expr_primary_luar_tail(ls, &tail, assign);
+      expr_primary_luar_tail(ls, &tail);
       bcemit_binop(fs, OPR_AND, v, &tail);
     } else if (ls->tok == TK_fldoper) {
       ExpDesc func;
@@ -2181,8 +2182,33 @@ static void expr_primary_luar_tail(LexState *ls, ExpDesc *v, int assign)
   }
 }
 
-static void expr_primary_luar(LexState *ls, ExpDesc *v, int assign)
+static void expr_symbolname_luar(LexState *ls, ExpDesc *v)
 {
+  BCLine line = ls->linenumber;
+  int br = lex_opt(ls, '(');
+  luar_opt_mangle(ls);
+  switch(ls->tok) {
+    case TK_name:
+    case TK_oper:
+    case TK_fldoper:
+#if !LJ_52
+    case TK_goto:
+#endif
+      expr_str(ls, v);
+      break;
+    default:
+      err_syntax(ls, LJ_ERR_XSYMBOL);
+  }
+  if (br)
+    lex_match(ls, ')', '(', line);
+}
+
+static void expr_primary_luar(LexState *ls, ExpDesc *v)
+{
+  if (lex_opt(ls, TK_nameof)) {
+    expr_symbolname_luar(ls, v);
+    return;
+  }
   luar_opt_mangle(ls);
   /* Parse prefix expression. */
   if (ls->tok == '(') {
@@ -2195,22 +2221,22 @@ static void expr_primary_luar(LexState *ls, ExpDesc *v, int assign)
     case TK_name:
     case TK_oper:
     case TK_fldoper:
-      #if !LJ_52
+#if !LJ_52
     case TK_goto:
-      #endif
+#endif
       var_lookup(ls, v);
       break;
     default:
       err_syntax(ls, LJ_ERR_XSYMBOL);
   }
-  return expr_primary_luar_tail(ls, v, assign);
+  return expr_primary_luar_tail(ls, v);
 }
 
 /* Parse primary expression. */
 static void expr_primary(LexState *ls, ExpDesc *v)
 {
   if (G(ls->L)->pars.mode == 1)
-    return expr_primary_luar(ls, v, 0);
+    return expr_primary_luar(ls, v);
   FuncState *fs = ls->fs;
   /* Parse prefix expression. */
   if (ls->tok == '(') {
