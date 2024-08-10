@@ -40,6 +40,7 @@ Call it without arguments to get the current mode, or pass in the mode to set.
 Some feature is planned to override the format detection behaviour for setting any syntax mode for `dofile` and `require` without limitations.
 
 ### For syntax description, the following 'description language' will be used:
+
 Required part is written inside the `@<>` block.\
 Optional part is written inside the `@[]` block.\
 To escape the `>` or `]`, `\` may be used.\
@@ -118,7 +119,6 @@ Explanation of blocks used:
 
 ### Examples
 ```luar
-
 // variant 1
 local fn empty1() {}
 local fn empty2(a, b) {}
@@ -231,6 +231,7 @@ assert(result == foo~.bar);
 ```
 
 ### Mangling
+
 The code in Luar is generally transcribable to Lua, including operators (which use identifier symbols for encoding).
 Hence, all operators' symbol names are mangled, and any name starting with `__LR` is reserved.
 And so, the code for definition of Luar operator would look in Lua like following
@@ -255,8 +256,11 @@ print(8 ^&*^&* 7); // 15
 print("qwer" ^&*^&* 5); // qwerqwerqwerqwerqwer
 ```
 
+#### `nameof`
+
 For convenient definition of custom operators as methods, the new keyword `nameof` is added.
 When beginning a primary expression, it will make the symbol name parse as a constant string.
+
 Some examples:
 ```luar
 assert(nameof foo == "foo");
@@ -266,7 +270,7 @@ local psub = nameof operator ->;
 local tmul = nameof operator<newindex> *.;
 ```
 
-Possible usage:
+Possible usage (full program):
 ```luar
 local fn defineStdOP(name) {
 	_G[name] = fn(self, a) getmetatable(self)[name](self, a);
@@ -284,9 +288,34 @@ obj -= 3;
 print(obj.v); // -1
 ```
 
+#### Operator table keys
+
+The `operator` keyword may be used directly in the name of field, in the same fashion
+as in definition and referencing of operators (with single-part names).
+Function definitions with nested names including such fields are also supported: \
+`@<primary expr>.@[operator @[<newindex>]] @<name>` \
+`fn @<nested name parts...>.@[operator @[<newindex>]] @<name> (@[args...]) @[@<body>]`
+
+Example (full program):
+```luar
+local obj = {
+    [nameof operator *.] = fn() {},
+    [nameof operator<newindex> *.] = fn() {}
+};
+fn obj.operator +=(self, o) print(self, o);
+
+local f = obj.operator +=;
+local r = obj.operator *.;
+local y = obj.operator<newindex> *.;
+
+assert(f == obj.+=);
+assert(r ~= y);
+assert(obj[nameof *.] == r);
+```
+
 ### Extra examples
 
-My favorite usage:
+My favourite usage:
 ```luar
 local fn operator |>(a, b) b(a);
 

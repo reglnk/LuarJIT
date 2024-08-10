@@ -1103,7 +1103,9 @@ static LJ_AINLINE void luar_str_mangle(LexState *ls, const char *str, unsigned l
  * mangle token string with respect to that. Or do nothing */
 static LJ_AINLINE void luar_opt_mangle(LexState *ls)
 {
-#define luar_newindex "newindex"
+/* variations of field operators */
+#define opv_index "index"
+#define opv_newindex "newindex"
   if (!lex_opt(ls, TK_operator))
     return;
   switch (ls->tok) {
@@ -1120,20 +1122,28 @@ static LJ_AINLINE void luar_opt_mangle(LexState *ls)
         break;
       }
       GCstr *s = lex_str(ls);
-      if (s->len != sizeof(luar_newindex) - 1 || memcmp(strdata(s), luar_newindex, sizeof(luar_newindex) - 1))
+      int tp = (s->len == sizeof(opv_index) - 1 &&
+        !memcmp(strdata(s), opv_index, sizeof(opv_index) - 1)
+      );
+      if (!tp) tp = (int)(s->len == sizeof(opv_newindex) - 1 &&
+        !memcmp(strdata(s), opv_newindex, sizeof(opv_newindex) - 1)
+      ) << 1;
+      if (!tp)
         lj_lex_error(ls, ls->tok, LJ_ERR_XSYNTAX);
       lex_check(ls, '>');
       if (ls->tok != TK_fldoper) {
         lj_lex_error(ls, ls->tok, LJ_ERR_XSYNTAX);
         break;
       }
-      setstrV(ls->L, &ls->tokval, luar_str_mangle2(ls, LUAR_AOPHDR, LUAR_AOPHDR_LEN, strV(&ls->tokval), LUAR_OPHDR_LEN));
+      if (tp == 2)
+        setstrV(ls->L, &ls->tokval, luar_str_mangle2(ls, LUAR_AOPHDR, LUAR_AOPHDR_LEN, strV(&ls->tokval), LUAR_OPHDR_LEN));
       break;
     }
     default:
       lj_lex_error(ls, ls->tok, LJ_ERR_XSYNTAX);
   }
-#undef luar_newindex
+#undef opv_index
+#undef opv_newindex
 }
 
 /* -- Variable handling --------------------------------------------------- */
@@ -1792,6 +1802,19 @@ static void expr_field(LexState *ls, ExpDesc *v)
   expr_index(fs, v, &key);
 }
 
+/* Parse index expression where the named field may be
+ * a custom operator name. */
+static void expr_field_luar(LexState *ls, ExpDesc *v)
+{
+  FuncState *fs = ls->fs;
+  ExpDesc key;
+  expr_toanyreg(fs, v);
+  lj_lex_next(ls);  /* Skip dot or colon. */
+  luar_opt_mangle(ls);
+  expr_str(ls, &key);
+  expr_index(fs, v, &key);
+}
+
 /* Parse index expression with brackets. */
 static void expr_bracket(LexState *ls, ExpDesc *v)
 {
@@ -2126,7 +2149,7 @@ static void expr_primary_luar_tail(LexState *ls, ExpDesc *v)
   FuncState *fs = ls->fs;
   for (;;) {
     if (ls->tok == '.') {
-      expr_field(ls, v);
+      expr_field_luar(ls, v);
     } else if (ls->tok == '[') {
       ExpDesc key;
       expr_toanyreg(fs, v);
@@ -2654,15 +2677,19 @@ static void parse_func(LexState *ls, BCLine line)
   ExpDesc v, b;
   int needself = 0;
   lj_lex_next(ls);  /* Skip 'function'. */
-  if (G(ls->L)->pars.mode == 1)
+  void (*pfnexprfld)(LexState *, ExpDesc *);
+  if (G(ls->L)->pars.mode == 1) {
     luar_opt_mangle(ls);
+    pfnexprfld = expr_field_luar;
+  }
+  else pfnexprfld = expr_field;
   /* Parse function name. */
   var_lookup(ls, &v);
   while (ls->tok == '.')  /* Multiple dot-separated fields. */
-    expr_field(ls, &v);
+    pfnexprfld(ls, &v);
   if (ls->tok == ':') {  /* Optional colon to signify method call. */
     needself = 1;
-    expr_field(ls, &v);
+    pfnexprfld(ls, &v);
   }
   parse_body(ls, &b, needself, line);
   fs = ls->fs;
