@@ -2108,6 +2108,7 @@ static int parse_infix_isend(LexToken tok)
     case TK_ne:
     case TK_label:
     case TK_eof:
+    case ',':
     case ';':
     case '}':
     case ')':

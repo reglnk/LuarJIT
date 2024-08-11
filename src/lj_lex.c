@@ -585,7 +585,9 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
             lex_next(ls);
           continue;
         }
-        goto oper_encode;
+        if (luar_char_oper_toident(ls->c))
+          goto oper_scan;
+        return '/';
       case '[': {
         int isc, sep = lex_skipeq_luar(ls, &isc);
         if (sep >= 0) {
@@ -646,7 +648,7 @@ static LexToken lex_scan_luar(LexState *ls, TValue *tv)
             lj_buf_reset(&ls->sb);
             return '=';
           }
-          while (luar_char_oper_toident(c = lex_savenext(ls)));
+          oper_scan: while (luar_char_oper_toident(c = lex_savenext(ls)));
           oper_encode: {
             /* Encode operator chars into identifier symbols */
             /* Max symbols count written in below loop (31)
